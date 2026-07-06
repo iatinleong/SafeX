@@ -129,6 +129,67 @@ with st.sidebar:
         else:
             st.caption("目前無掛單")
 
+    st.markdown("**危險操作**")
+
+    cancel_confirm = st.checkbox("確認撤銷全部掛單", key="confirm_cancel_all", disabled=not open_orders)
+    if st.button("撤銷所有掛單", disabled=not (open_orders and cancel_confirm)):
+        cancel_results = []
+        symbols_with_orders = sorted({o["symbol"] for o in open_orders})
+        with st.spinner("撤銷掛單中..."):
+            for symbol in symbols_with_orders:
+                try:
+                    resp = oe._signed_request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol})
+                    cancel_results.append({"symbol": symbol, "status": "OK", "response": resp})
+                except Exception as e:
+                    cancel_results.append({"symbol": symbol, "status": "ERROR", "error": str(e)})
+        st.session_state["cancel_all_results"] = cancel_results
+        st.session_state["confirm_cancel_all"] = False
+        _load_account_snapshot.clear()
+        st.rerun()
+
+    close_confirm = st.checkbox("確認一鍵全平倉（市價）", key="confirm_close_all", disabled=not detailed_positions)
+    if st.button("一鍵全平倉", disabled=not (detailed_positions and close_confirm)):
+        close_results = []
+        hedge = oe.is_hedge_mode()
+        with st.spinner("送出平倉單中..."):
+            for p in detailed_positions:
+                symbol = p["symbol"]
+                side = "SELL" if p["side"] == "多" else "BUY"
+                params = {
+                    "symbol": symbol, "side": side, "type": "MARKET",
+                    "quantity": p["positionAmt"], "newOrderRespType": "RESULT",
+                }
+                if hedge:
+                    params["positionSide"] = "LONG" if p["side"] == "多" else "SHORT"
+                else:
+                    params["reduceOnly"] = "true"
+                try:
+                    resp = oe.place_order(params)
+                    close_results.append({"symbol": symbol, "status": "OK", "response": resp})
+                except Exception as e:
+                    close_results.append({"symbol": symbol, "status": "ERROR", "error": str(e)})
+        st.session_state["close_all_results"] = close_results
+        st.session_state["confirm_close_all"] = False
+        _load_account_snapshot.clear()
+        st.rerun()
+
+    if st.session_state.get("cancel_all_results"):
+        with st.expander("撤銷掛單結果", expanded=True):
+            for r in st.session_state["cancel_all_results"]:
+                if r["status"] == "OK":
+                    st.success(f"{r['symbol']}：已撤銷")
+                else:
+                    st.error(f"{r['symbol']}：{r['error']}")
+
+    if st.session_state.get("close_all_results"):
+        with st.expander("全平倉結果", expanded=True):
+            for r in st.session_state["close_all_results"]:
+                if r["status"] == "OK":
+                    resp = r["response"] or {}
+                    st.success(f"{r['symbol']}：已平倉 orderId={resp.get('orderId')} status={resp.get('status')}")
+                else:
+                    st.error(f"{r['symbol']}：{r['error']}")
+
     st.markdown("**Stage3 帳戶上下文**")
     st.text(tsa.build_account_context_text(positions, prices))
 
