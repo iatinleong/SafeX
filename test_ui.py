@@ -143,7 +143,6 @@ with st.sidebar:
                 except Exception as e:
                     cancel_results.append({"symbol": symbol, "status": "ERROR", "error": str(e)})
         st.session_state["cancel_all_results"] = cancel_results
-        st.session_state["confirm_cancel_all"] = False
         _load_account_snapshot.clear()
         st.rerun()
 
@@ -169,7 +168,6 @@ with st.sidebar:
                 except Exception as e:
                     close_results.append({"symbol": symbol, "status": "ERROR", "error": str(e)})
         st.session_state["close_all_results"] = close_results
-        st.session_state["confirm_close_all"] = False
         _load_account_snapshot.clear()
         st.rerun()
 
