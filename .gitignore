@@ -1,0 +1,26 @@
+# --- 敏感資料，絕不提交到 git ---
+.streamlit/secrets.toml
+.env
+.env.*
+*secret*
+*credential*
+*.pem
+*.key
+
+# --- 阿佛禁言群聊天資料（含真實訊息內容，不上傳）---
+阿佛禁言群B_結構化.jsonl
+阿佛禁言群B_可交易訊號.jsonl
+阿佛禁言群B_下單參數.jsonl
+order_execution_state.jsonl
+
+# --- 執行期記錄/暫存，不需要版本控制 ---
+monitor_logs/
+test_scroll_captures_deep/
+*.log
+gemini_vs_tesseract_report.txt
+
+# --- Python 常見暫存 ---
+__pycache__/
+*.pyc
+.venv/
+venv/
