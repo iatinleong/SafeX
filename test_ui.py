@@ -161,15 +161,7 @@ if run:
             "orders": orders,
         }
 
-        st.subheader("Stage3 結果（可交易訊號，對照 阿佛禁言群B_可交易訊號.jsonl）")
-        if not orders:
-            st.info("模型判斷：此訊息目前無可執行的具體交易指令（略過，不產生訂單）。")
-        st.json(stage3_record, expanded=True)
-
-        st.subheader("Stage4 結果（下單參數試算，對照 阿佛禁言群B_下單參數.jsonl）")
-        if not orders:
-            st.info("沒有 Stage3 訂單可供試算。")
-        else:
+        if orders:
             symbol_count = oe._symbol_count_needing_quantity(orders)
             stage4_results = []
             for order_idx, order in enumerate(orders):
@@ -197,13 +189,79 @@ if run:
                         "order_request": None,
                         "error": str(e),
                     })
+        else:
+            stage4_results = []
 
-            for r in stage4_results:
-                label = f"order_idx={r['order_idx']} {r['symbol']} {r['position_action']} -> {r['status']}"
-                if r["status"] == "ERROR":
-                    st.error(f"{label}：{r['error']}")
-                else:
-                    st.success(label)
-                    st.json(r["order_request"]["params"])
-                    with st.expander("計算明細（含忽略的 LLM position_size_pct、槓桿、保證金等）"):
-                        st.json(r["calc_detail"])
+        # 新一輪 Stage3+4 結果存進 session_state，供下方下單按鈕使用（按鈕點擊會觸發 rerun，
+        # 若不存進 session_state，這裡算出來的 orders/stage4_results 會在 rerun 後消失）。
+        st.session_state["stage3_record"] = stage3_record
+        st.session_state["stage4_results"] = stage4_results
+        st.session_state["order_exec_results"] = None  # 新一輪轉換，清掉舊的下單結果
+
+if st.session_state.get("stage3_record") is not None:
+    stage3_record = st.session_state["stage3_record"]
+    stage4_results = st.session_state["stage4_results"]
+    orders = stage3_record["orders"]
+
+    st.subheader("Stage3 結果（可交易訊號，對照 阿佛禁言群B_可交易訊號.jsonl）")
+    if not orders:
+        st.info("模型判斷：此訊息目前無可執行的具體交易指令（略過，不產生訂單）。")
+    st.json(stage3_record, expanded=True)
+
+    st.subheader("Stage4 結果（下單參數試算，對照 阿佛禁言群B_下單參數.jsonl）")
+    if not orders:
+        st.info("沒有 Stage3 訂單可供試算。")
+    else:
+        for r in stage4_results:
+            label = f"order_idx={r['order_idx']} {r['symbol']} {r['position_action']} -> {r['status']}"
+            if r["status"] == "ERROR":
+                st.error(f"{label}：{r['error']}")
+            else:
+                st.success(label)
+                st.json(r["order_request"]["params"])
+                with st.expander("計算明細（含忽略的 LLM position_size_pct、槓桿、保證金等）"):
+                    st.json(r["calc_detail"])
+
+    ready_results = [r for r in stage4_results if r["status"] == "READY"]
+    exec_results = st.session_state.get("order_exec_results")
+
+    if ready_results and exec_results is None:
+        st.subheader("Stage5：送出下單（Binance Testnet）")
+        st.warning(f"點擊後會對上面 {len(ready_results)} 筆 READY 訂單依序：設定槓桿 -> "
+                   f"/fapi/v1/order/test 驗證參數 -> 全部通過才送出 /fapi/v1/order 真正下單，"
+                   f"會在你的 Testnet 帳戶產生真實部位/掛單。")
+        if st.button("送出下單 (Testnet)", type="primary"):
+            new_exec_results = []
+            with st.spinner("送出訂單中..."):
+                for r in ready_results:
+                    detail = r["calc_detail"]
+                    params = r["order_request"]["params"]
+                    try:
+                        if detail.get("leverage_will_be_set_before_order"):
+                            oe.set_leverage(detail["symbol"], oe.DEFAULT_LEVERAGE)
+                        oe._signed_request("POST", "/fapi/v1/order/test", params)  # 不成交驗證
+                        resp = oe.place_order(params)  # 實際送出
+                        new_exec_results.append({
+                            "order_idx": r["order_idx"], "symbol": r["symbol"],
+                            "status": "OK", "response": resp,
+                        })
+                    except Exception as e:
+                        new_exec_results.append({
+                            "order_idx": r["order_idx"], "symbol": r["symbol"],
+                            "status": "ERROR", "error": str(e),
+                        })
+            st.session_state["order_exec_results"] = new_exec_results
+            _load_account_snapshot.clear()  # 讓側邊欄下一次讀到最新的資產/持倉/掛單
+            st.rerun()
+
+    if exec_results:
+        st.subheader("下單結果")
+        for r in exec_results:
+            label = f"order_idx={r['order_idx']} {r['symbol']} -> {r['status']}"
+            if r["status"] == "OK":
+                resp = r["response"] or {}
+                st.success(f"{label}  orderId={resp.get('orderId')} status={resp.get('status')}")
+                st.json(resp)
+            else:
+                st.error(f"{label}：{r['error']}")
+        st.caption("已送出，側邊欄「Binance Testnet 帳戶」會顯示最新持倉/掛單（如未自動更新可點左側「重新整理帳戶資料」）。")
