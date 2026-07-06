@@ -21,18 +21,115 @@ st.title("阿佛禁言群 訊號 → 可交易訂單 測試台")
 st.caption("輸入一句原始訊息，實際呼叫 Stage3（Gemini）+ Stage4（下單參數試算），結果與批次 jsonl 格式一致。")
 
 
-@st.cache_data(ttl=15, show_spinner="查詢 Binance Testnet 持倉與現價...")
+def _fmt_num(val, digits=4):
+    if val is None or val == "":
+        return "-"
+    try:
+        return f"{float(val):,.{digits}f}"
+    except (TypeError, ValueError):
+        return str(val)
+
+
+def _fetch_testnet_details():
+    """查詢 Testnet 資產、持倉明細與 open orders。"""
+    assets = {}
+    detailed_positions = []
+    open_orders = []
+    error = None
+
+    try:
+        account = oe._signed_request("GET", "/fapi/v2/account", {})
+        usdt = next((a for a in account.get("assets", []) if a.get("asset") == "USDT"), {})
+        assets = {
+            "walletBalance": usdt.get("walletBalance"),
+            "availableBalance": usdt.get("availableBalance"),
+            "crossWalletBalance": usdt.get("crossWalletBalance"),
+            "unrealizedProfit": usdt.get("unrealizedProfit"),
+        }
+
+        raw_positions = oe._signed_request("GET", "/fapi/v2/positionRisk", {})
+        for p in raw_positions:
+            symbol = p.get("symbol")
+            if symbol not in tsa.SUPPORTED_SYMBOLS:
+                continue
+            amt = float(p.get("positionAmt", 0) or 0)
+            if amt == 0:
+                continue
+            side = "多" if amt > 0 else "空"
+            detailed_positions.append({
+                "symbol": symbol,
+                "side": side,
+                "positionSide": p.get("positionSide"),
+                "positionAmt": abs(amt),
+                "entryPrice": p.get("entryPrice"),
+                "markPrice": p.get("markPrice"),
+                "unRealizedProfit": p.get("unRealizedProfit"),
+                "leverage": p.get("leverage"),
+                "marginType": p.get("marginType"),
+            })
+
+        for symbol in tsa.SUPPORTED_SYMBOLS:
+            for o in oe._signed_request("GET", "/fapi/v1/openOrders", {"symbol": symbol}):
+                open_orders.append({
+                    "symbol": o.get("symbol"),
+                    "orderId": o.get("orderId"),
+                    "side": o.get("side"),
+                    "positionSide": o.get("positionSide"),
+                    "type": o.get("type"),
+                    "origQty": o.get("origQty"),
+                    "price": o.get("price"),
+                    "stopPrice": o.get("stopPrice"),
+                    "status": o.get("status"),
+                    "reduceOnly": o.get("reduceOnly"),
+                    "closePosition": o.get("closePosition"),
+                })
+    except Exception as e:
+        error = str(e)
+
+    return assets, detailed_positions, open_orders, error
+
+
+@st.cache_data(ttl=15, show_spinner="查詢 Binance Testnet 帳戶資料...")
 def _load_account_snapshot():
     positions = tsa.fetch_positions()
     prices = tsa.fetch_prices()
-    return positions, prices
+    assets, detailed_positions, open_orders, error = _fetch_testnet_details()
+    return positions, prices, assets, detailed_positions, open_orders, error
 
 
 with st.sidebar:
-    st.subheader("目前帳戶快照")
-    if st.button("重新整理持倉/現價"):
+    st.subheader("Binance Testnet 帳戶")
+    if st.button("重新整理帳戶資料"):
         _load_account_snapshot.clear()
-    positions, prices = _load_account_snapshot()
+    positions, prices, assets, detailed_positions, open_orders, api_error = _load_account_snapshot()
+
+    if api_error:
+        st.warning(f"帳戶資料查詢失敗：{api_error}")
+
+    st.markdown("**資產 (USDT)**")
+    if assets:
+        c1, c2 = st.columns(2)
+        c1.metric("可用餘額", _fmt_num(assets.get("availableBalance"), 2))
+        c2.metric("錢包餘額", _fmt_num(assets.get("walletBalance"), 2))
+        c3, c4 = st.columns(2)
+        c3.metric("全倉餘額", _fmt_num(assets.get("crossWalletBalance"), 2))
+        c4.metric("未實現盈虧", _fmt_num(assets.get("unrealizedProfit"), 2))
+    else:
+        st.caption("無法取得資產資料")
+
+    with st.expander("持倉 (Positions)", expanded=True):
+        if detailed_positions:
+            st.dataframe(detailed_positions, use_container_width=True, hide_index=True)
+        else:
+            st.caption("目前無持倉")
+
+    with st.expander("掛單 (Open Orders)", expanded=True):
+        if open_orders:
+            st.dataframe(open_orders, use_container_width=True, hide_index=True)
+        else:
+            st.caption("目前無掛單")
+
+    st.markdown("**Stage3 帳戶上下文**")
     st.text(tsa.build_account_context_text(positions, prices))
 
 source_text = st.text_area(
